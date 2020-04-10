@@ -116,7 +116,8 @@ vhdl_tokens = {
     (r'\s*(\w+)\s*', 'port_param'),
     (r'\s*,\s*', None),
     (r'\s*:\s*', None, 'port_param_type'),
-    (r'--#\s*{{(.*)}}\n', 'section_meta'),
+    #(r'--#\s*{{(.*)}}\n', 'section_meta'),
+    (r'--#\s*{{(.*)}}\s*\n', 'section_meta'),
     (r'--#(.*)\n', 'metacomment'),
     (r'/\*', 'block_comment', 'block_comment'),
     (r'--.*\n', None),
@@ -314,8 +315,17 @@ class VhdlEntity(VhdlObject):
 
   def dump(self):
     print('VHDL entity: {}'.format(self.name))
+    print("Generics:")
+    for g in self.generics:
+      print('\t{} ({}), {} ({})'.format(g.name, type(g.name), g.data_type, type(g.data_type)))
+    print("ports:")
     for p in self.ports:
       print('\t{} ({}), {} ({})'.format(p.name, type(p.name), p.data_type, type(p.data_type)))
+    print("sections:")
+    for s,d in self.sections.iteritems():
+      print('\t{} ({}), {} ({})'.format(s, type(s),d,type(d)))
+    for m in self.desc :
+      print('\t{} ({}), {} ({})'.format(m.name, type(m.name), m.data_type, type(m.data_type)))		
 
 class VhdlComponent(VhdlObject):
   '''Component declaration
@@ -388,14 +398,17 @@ def parse_vhdl(text):
   
   for pos, action, groups in lex.run(text):
     if action == 'metacomment':
+      #print("Detectado metacomment")
       realigned = re.sub(r'^#+', lambda m: ' ' * len(m.group(0)), groups[0])
       if last_item is None:
         metacomments.append(realigned)
       else:
         last_item.desc = realigned
+      #print("Metacomment detectado : %s"%realigned)
     if action == 'section_meta':
       sections.append((port_param_index, groups[0]))
-
+      #print( "Section_meta encontrado")
+      #print(groups[0])
     elif action == 'function':
       kind = 'function'
       name = groups[0]
@@ -510,7 +523,7 @@ def parse_vhdl(text):
       param_items = []
       last_item = ports[-1]
 
-    elif action == 'end_entity':
+    elif action == 'end_entity': 
       vobj = VhdlEntity(name, ports, generics, dict(sections), metacomments)
       objects.append(vobj)
       last_item = None
@@ -657,10 +670,11 @@ class VhdlExtractor(object):
       List of parsed objects.
     '''
     objects = parse_vhdl(text)
+    
     self._register_array_types(objects)
 
     if type_filter:
-      objects = [o for o in objects if isinstance(o, type_filter)]
+      objects = [o for o in objects if isinstance(o, type_filter)]  
 
     return objects
 
@@ -749,24 +763,49 @@ class VhdlExtractor(object):
 
 if __name__ == '__main__':
   ve = VhdlExtractor()
+#  code = '''
+#package foo is
+#  function afunc(q,w,e : std_ulogic; h,j,k : unsigned) return std_ulogic;
+#
+#  procedure aproc( r,t,y : in std_ulogic; u,i,o : out signed);
+#
+#  component acomp is
+#    port (
+#      a,b,c : in std_ulogic;
+#      f,g,h : inout bit
+#    );
+#  end component;
+#
+#end package;
+#  '''
   code = '''
-package foo is
-  function afunc(q,w,e : std_ulogic; h,j,k : unsigned) return std_ulogic;
+  library IEEE;
+  use IEEE.STD_LOGIC_1164.all;
+  use IEEE.NUMERIC_STD.all;
 
-  procedure aproc( r,t,y : in std_ulogic; u,i,o : out signed);
-
-  component acomp is
-    port (
-      a,b,c : in std_ulogic;
-      f,g,h : inout bit
-    );
-  end component;
-
-end package;
+  entity entity_temp is 
+	generic (
+	  G_WITH : integer
+	);
+	port (
+                -- Normal Comment
+                --# {{clocks|Clocking_no_valid}} No Valid
+		CLK     : in std_logic;
+                --# {{clocks|Clocking Valid}}
+		CLK_2   : in std_logic;
+                --# {Reset no valid}
+                Reset_n : in std_logic;
+                --# {{data|Input Signal}} 
+                Data_in : in std_logic_vector(G_WITH-1 downto 0);
+                --# {{data|Output Signal}}    
+		Data_out : out std_logic_vector(G_WITH-1 downto 0)
+	);
+  end entity;  
   '''
 
-  objs = ve.extract_objects_from_source(code)
 
+  objs = ve.extract_objects_from_source(code)
+  
   for o in objs:
     print(o.name)
     try:
@@ -780,3 +819,5 @@ end package;
         print(p)
     except:
       pass
+    print("\n\n")
+    o.dump()
