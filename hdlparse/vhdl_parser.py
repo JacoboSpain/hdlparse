@@ -6,6 +6,7 @@ from __future__ import print_function
 import re, os, io, ast
 from pprint import pprint
 from minilexer import MiniLexer
+from collections import OrderedDict
 
 '''VHDL documentation parser'''
 
@@ -18,9 +19,9 @@ vhdl_tokens = {
     (r'function\s+(\w+)', 'function', 'simple_func'),
     (r'component\s+(\w+)\s*is', 'component', 'component'),
     (r'entity\s+(\w+)\s*is', 'entity', 'entity'),
-    (r'architecture\s+(\w+)\s*of', 'architecture', 'architecture'),
     (r'subtype\s+(\w+)\s+is\s+(\w+)', 'subtype'),
-    (r'type\s+(\w+)\s*is', 'type', 'type_decl'),
+    (r'type\s+(\w+)\s*is', 'type', 'type_decl'),    
+    (r'architecture\s+(\w+)\s*of', 'architecture', 'architecture'),
     (r'/\*', 'block_comment', 'block_comment'),
     (r'--.*\n', None),
   ],
@@ -92,6 +93,9 @@ vhdl_tokens = {
   ],
   'architecture': [
     (r'end\s+architecture\s*;', 'end_arch', '#pop'),
+    #(r'case\s*[(]\s*(.*)\s*[)]\s*is', 'case' ,'case'),
+    (r'case\s*[(]\s*(\w+)\s*[)]\s*is', 'case' ,'case'),
+    (r'type\s+(\w+)\s*is', 'type', 'type_decl'),   
     (r'/\*', 'block_comment', 'block_comment'),
     (r'--.*\n', None),
   ],
@@ -143,6 +147,14 @@ vhdl_tokens = {
   'block_comment': [
     (r'\*/', 'end_comment', '#pop'),
   ],
+  # Cambio anadimos parser para los case
+  'case' : [
+    #(r'--#\s*{\s*{\s*(.*)\s*}\s*}\s*','section_meta'),
+    (r'when\s*(\w*)\s*', 'when'),
+    (r'--#\s*{\s*{\s*(\w+)\s*[|]\s*(\w+)\s*}\s*}\s*','fsm_meta'),
+    (r'end\s+case\s*;', 'end_case', '#pop'),
+    (r'--.*\n', None),
+  ],
 }
       
 VhdlLexer = MiniLexer(vhdl_tokens, flags=re.MULTILINE | re.IGNORECASE)
@@ -159,6 +171,9 @@ class VhdlObject(object):
     self.name = name
     self.kind = 'unknown'
     self.desc = desc
+  
+  def dump(self):
+    pass
 
 class VhdlParameter(object):
   '''Parameter to subprograms, ports, and generics
@@ -217,6 +232,10 @@ class VhdlType(VhdlObject):
   def __repr__(self):
     return "VhdlType('{}', '{}')".format(self.name, self.type_of)
 
+  def dump(self):
+    print('VHDL type: {}'.format(self.name))
+    print('  package: {}'.format(self.package))
+    print('  type_of: {}'.format(self.type_of))
 
 class VhdlSubtype(VhdlObject):
   '''Subtype definition
@@ -355,6 +374,36 @@ class VhdlComponent(VhdlObject):
       print('\t{} ({}), {} ({})'.format(p.name, type(p.name), p.data_type, type(p.data_type)))
 
 
+# Para gestion de FSM.
+
+class VhdlFSM(VhdlObject):
+  '''  Fsm Declaration
+  
+  
+  '''
+  def __init__(self,name):
+    VhdlObject.__init__(self, name, None)
+    # Los datos se guardan en dict nombre : list(estados_siguientes)  
+    self.fsm = OrderedDict()
+    
+  def add_state(self,fsm_state,fsm_next):
+    #self.fsm[fsm_state] = fsm_next
+    self.fsm.update({fsm_state : fsm_next})  
+    #print(self.fsm)
+    
+  def __repr__(self):
+    return "VhdlFSM ('{}')".format(self.name)
+    
+  def dump(self):
+    print('VHDL FSM {}'.format(self.name))
+    for key, fsm_next in self.fsm.iteritems():
+        print ('Estado {} : '.format(key))
+        
+        for next in fsm_next :
+            print(' {} '.format(next))
+    
+    
+  
 def parse_vhdl_file(fname):
   '''Parse a named VHDL file
   
@@ -396,7 +445,23 @@ def parse_vhdl(text):
 
   objects = []
   
+  
+  # Para gestion FSM.  
+  temp_vhdl  = None
+  fsm_signal = None
+ 
+  fsm_state = None
+  fsm_next  = []
+
+  
   for pos, action, groups in lex.run(text):
+    #print("*******************")
+    #print("Action vale")
+    #print(action)
+    #print("groups vale")
+    #print(groups)
+    #print("*******************")
+  
     if action == 'metacomment':
       #print("Detectado metacomment")
       realigned = re.sub(r'^#+', lambda m: ' ' * len(m.group(0)), groups[0])
@@ -564,7 +629,52 @@ def parse_vhdl(text):
       kind = None
       name = None
       metacomments = []
-
+      
+    elif action == 'fsm_meta':
+      #print('Entrando en FSM META');
+      #print('group vale = {}'.format(groups))
+      #print('Longitud de groups = {}',len(groups))
+      
+      if (len(groups) == 2) and groups[0] == 'FSM':
+            fsm_signal = groups[1]
+            #print(vhdl_tokens['case'])
+            #print("Encontrada FSM")
+            #print("Variable a buscar = {}, type ( {} )".format(fsm_signal,type(fsm_signal)))
+            #print("Creamos nuevo pattron:")
+            fsm_pattern =  [(r'%s\s*<=\s*(\w*)\s*'%fsm_signal,'state')]
+            #print(fsm_pattern)
+            lex.insert_new_token('case',fsm_pattern)
+            temp_vhdl =  VhdlFSM(fsm_signal)
+    elif action == 'when' :
+    
+      # Almacenamos el state que se esta configurando.   diccionario : fsm_state : (estados posibles).
+      if (fsm_signal is not None) and (fsm_state is not None):    
+         temp_vhdl.add_state(fsm_state, fsm_next)
+      fsm_next = []
+      
+      #print("When encontrado {}".format(groups))    
+      fsm_state = groups[0]
+      
+    elif action == 'state':
+      #print('Encontrado state next = {}'.format(groups))  
+      #fsm_next.append(groups[0])
+      # Anadimos al final de la lista
+      fsm_next.insert(len(fsm_next),groups[0])
+      #print(fsm_next)
+      
+    elif action == 'end_case' : # Hay que acabar de anadir los ultimo valores.
+      if (fsm_state is not None) and (temp_vhdl is not None):   
+          temp_vhdl.add_state(fsm_state, fsm_next)
+      if temp_vhdl is not None:
+        #print("Detectado end case, finalizamos fsm")
+        
+        fsm_signal = None
+        fsm_next   = []
+        objects.append(temp_vhdl)
+        temp_vhdl = None
+        fsm_state = None
+        lex.delete_last_token('case');
+      
   return objects
 
 
@@ -783,7 +893,7 @@ if __name__ == '__main__':
   use IEEE.STD_LOGIC_1164.all;
   use IEEE.NUMERIC_STD.all;
 
-  entity entity_temp is 
+  entity entity_temp is                        
 	generic (
 	  G_WITH : integer
 	);
@@ -801,8 +911,46 @@ if __name__ == '__main__':
 		Data_out : out std_logic_vector(G_WITH-1 downto 0)
 	);
   end entity;  
-  '''
+  
+  architecture RTL of entity_temp is
+  
+    type fsm_state is (fsm_1,
+                       Fsm_2,
+                       Fsm_3);
+    signal r_fsm_control : fsm_state;
+  begin
+    
+    process(CLK)
+    begin
+         case(r_fsm_control)is
+         --# {{FSM | r_fsm_control}}
+         when fsm_1=>
 
+            if in = '1' then
+                r_fsm_control <= fsm_2;
+            else
+                r_fsm_control <= fsm_1;
+            end if;
+
+         when fsm_2 =>
+            r_fsm_control <= fsm_3;
+         when fsm_3  =>  
+            r_fsm_control <= fsm_1;
+         end case;
+    
+        -- Case que no es FSM.
+        case(no_valido):
+        when no_case_1 =>
+            r_fsm_control <= no_case_2;
+            
+        when no_case_2 =>
+            r_fsm_control <= no_case_1;
+            
+        end case;   
+    end process;
+  
+  end architecture;
+  '''
 
   objs = ve.extract_objects_from_source(code)
   
@@ -820,4 +968,5 @@ if __name__ == '__main__':
     except:
       pass
     print("\n\n")
+    
     o.dump()

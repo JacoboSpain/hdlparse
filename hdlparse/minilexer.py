@@ -7,7 +7,7 @@ import re
 
 '''Minimalistic lexer engine inspired by the PyPigments RegexLexer'''
 
-__version__ = '1.0.5'
+__version__ = '1.0.7'
 
 class MiniLexer(object):
   '''Simple lexer state machine with regex matching rules'''
@@ -20,7 +20,7 @@ class MiniLexer(object):
       flags (int): Optional regex flags
     '''
     self.tokens = {}
-
+    self.flags  = flags
     # Pre-process the state definitions
     for state, patterns in tokens.iteritems():
       full_patterns = []
@@ -38,8 +38,27 @@ class MiniLexer(object):
 
         full_patterns.append((pat, action, new_state))
       self.tokens[state] = full_patterns
+      #print("[minilexer] [state = {}] type(state)={}".format(state,type(state)) )
 
-
+      
+  def insert_new_token(self,state,new_token):
+  
+      #print('[insert_new_token] longitud token[state]',len(self.tokens[state]))
+      for patterns in new_token : #.iteritems():
+        pat = re.compile(patterns[0], self.flags)
+        action = patterns[1]
+        self.tokens[state].append((pat,action,None))
+      #print('[insert_new_token] longitud  FInal token[state]',len(self.tokens[state]))
+      
+  def delete_last_token(self,state):
+    '''
+        Elimina el ultimo elemento de la lista.
+    '''
+    self.tokens[state].pop()
+    
+    
+    
+    
   def run(self, text):
     '''Run lexer rules against a source text
 
@@ -53,16 +72,19 @@ class MiniLexer(object):
     stack = ['root']
     pos = 0
 
-    patterns = self.tokens[stack[-1]]
+    self.patterns = self.tokens[stack[-1]]
 
     while True:
-      for pat, action, new_state in patterns:
+      for pat, action, new_state in self.patterns:
+        #print("[minilexer] action = {}".format(action))
+        
         m = pat.match(text, pos)
         if m:
+          #print("[minilexer] se encontro {}".format(action))
           if action:
             #print('## MATCH: {} -> {}'.format(m.group(), action))
             yield (pos, m.end()-1), action, m.groups()
-
+           
           pos = m.end()
 
           if new_state:
@@ -72,7 +94,7 @@ class MiniLexer(object):
               stack.append(new_state)
 
             #print('## CHANGE STATE:', pos, new_state, stack)
-            patterns = self.tokens[stack[-1]]
+            self.patterns = self.tokens[stack[-1]]
 
           break
 
@@ -84,4 +106,4 @@ class MiniLexer(object):
           pos += 1
         except IndexError:
           break
-
+  
